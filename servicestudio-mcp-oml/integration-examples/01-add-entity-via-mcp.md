@@ -26,7 +26,7 @@ Every call observes the host-managed session pointer. The **first** call after a
 
 ## Turn
 
-The agent obtains a session token, runs three sequential MCP tool calls, then surfaces the change via the IDE.
+The agent obtains a session token, reads the module, opens an edit session, mutates and verifies, surfaces the change via the IDE, then closes the edit session.
 
 ### Call 0 — `createSessionToken`
 
@@ -71,6 +71,20 @@ The agent pattern-matches against this — note the call shapes
 verbose receiver names (`testBasicTypesWithou`) or the lambda head
 (`(OutSystems.Model.IReference _System_) =>`). Those belong to the read
 verb's rendering and are irrelevant when emitting your own lambda.
+
+### Call 1b — `startOmlEditSession`
+
+`applyModelApiCode` refuses to run without an open edit session on the module. It fails as an MCP tool error: *"No OML edit session is started. Call startOmlEditSession before making edits."* Reads like Call 1 don't need one. Open it once per module, before the first apply:
+
+```jsonc
+{ "input": { "eSpaceName": "MyModule" }, "sessionToken": "<token>" }
+```
+
+```jsonc
+{ "started": true }
+```
+
+A second `startOmlEditSession` on the same module fails with *"An OML edit session is already started for this module"*. If that session is yours, just carry on. See [`../SKILL.md`](../SKILL.md) § 0.1.
 
 ### Call 2 — `applyModelApiCode`
 
@@ -153,23 +167,40 @@ This is the default closing step. Take the `mutatedOmlPath` from the last succes
 
 Service Studio merges the mutated OML into the open module. Depending on the user's setting, that either opens the Compare-and-Merge window for them to review and accept (or reject) the diff, or is accepted with no dialog; `merged` in the response tells you how it ended. Skip this only for read-only tasks or when every apply returned `mutatedOmlPath: ""`. See [`../SKILL.md`](../SKILL.md) § 3.1.
 
+### Call 5 — `endOmlEditSession`
+
+The merge doesn't end the edit session. Once `merged` is `true` and you're done with the module, close it:
+
+```jsonc
+{ "input": { "eSpaceName": "MyModule" }, "sessionToken": "<token>" }
+```
+
+```jsonc
+{ "ended": true, "discardedChanges": false }
+```
+
+Ending a session discards any unmerged edits, which `discardedChanges: true` would report. So after a `merged: false`, leave the session open while the user decides.
+
 ---
 
 ## What just happened
 
-One token request and four MCP tool calls against the in-process MCP Server:
+One token request and six MCP tool calls against the in-process MCP Server:
 
 0. `createSessionToken` — once per agent session; the user approves it in Service Studio, and the token rides on every later call as `sessionToken`.
 1. `getDataModel` (with `includeJson: "Never"`) — learn the dialect and entity-creation patterns. The host snapshotted the open module on this first call.
+1b. `startOmlEditSession` — opens the edit session that `applyModelApiCode` requires on this module.
 2. `applyModelApiCode` — submit a **full `eSpace => { ... }` lambda**. The host stripped the trailing `}`, appended `eSpace.Save(...)`, re-closed the lambda, ran it against the snapshot via the sidecar, saved to a host-allocated path, and advanced the session pointer.
 3. `getDataModel` — verify. The host transparently read from the pointer set by call 2 — no agent-supplied path.
 4. `omlMerge` — the agent passes the `mutatedOmlPath` from Call 2 to merge the change into the open module, either through Service Studio's Compare-and-Merge window or with no dialog, per the user's setting.
+5. `endOmlEditSession` — closes the edit session once the merge succeeded.
 
 There is **no per-call process spawn** the agent has to engineer, no input-stream formatting, no exit-code parsing. The MCP transport delivers the result object directly as structured content; the host handles snapshotting, lambda finalisation, path injection, sidecar spawning, and pointer advancement.
 
 ## Things to remember
 
 - **Envelope: `{ "input": { … }, "sessionToken": "<token>" }`** on every tool except `listApps` (which takes only `sessionToken`). `applyModelApiCode`'s `input` takes `eSpaceName`, `code` (a full lambda) and `imports` — all three required (`[]` when you need none). Code-returning read tools take `eSpaceName` + `includeJson` (always `"Never"`); single-element variants additionally take `objectName`. **Never** pass `omlPath` / `outPath` — the host manages them.
+- **Edit session.** `startOmlEditSession` before the first `applyModelApiCode` on a module (throw-probes included), `endOmlEditSession` after the closing merge. Reads don't need one; `omlMerge` and `omlReset` don't end it.
 - **`code` is a full lambda.** Pass `eSpace => { ...statements... }`; do **not** include `eSpace.Save(...)`. The parameter must literally be `eSpace`, and the string must end with `}` (no trailing whitespace/newline/semicolon) — the host removes the last character (see [`../reference/lambda-contract.md`](../reference/lambda-contract.md)).
 - **Success signal.** A clean (empty) `exceptionMessage` plus a non-empty `mutatedOmlPath` ⇒ the chain advanced and the next call picks up automatically. A populated `exceptionMessage` (or an MCP tool error) ⇒ the pointer is unchanged and `mutatedOmlPath` is `""`, so the next call resumes from the last-good state (or the live module if there was no prior success).
 - **Default imports are generous.** The host adds 3 (`OutSystems.Model.UI`, `OutSystems.Model.UI.Web`, `OutSystems.Model.UI.Mobile`); the sidecar pre-imports 7 (`System`, `System.Linq`, `OutSystems.Model`, `.Enumerations`, `.Expressions`, `.Factory`, `.Types`). All 10 are in scope without listing them in `imports`. `imports` itself may only name `OutSystems.Model` or its sub-namespaces — the host rejects anything else.

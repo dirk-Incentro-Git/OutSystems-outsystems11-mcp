@@ -105,8 +105,8 @@ agent:
 > Add a DueDate Date attribute to the Task entity in the open module.
 ```
 
-Expected flow: read the model (`getDataModel`) → `applyModelApiCode` lambda →
-verify the response → `omlMerge` so the diff opens in Service Studio.
+Expected flow: read the model (`getDataModel`) → `startOmlEditSession` → `applyModelApiCode` lambda →
+verify the response → `omlMerge` so the diff opens in Service Studio → `endOmlEditSession`.
 
 ## Verify end-to-end
 

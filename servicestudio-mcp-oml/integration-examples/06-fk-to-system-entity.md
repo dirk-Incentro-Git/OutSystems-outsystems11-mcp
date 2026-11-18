@@ -67,6 +67,10 @@ human-readable `eSpace.References.Named("(System)")` idiom.
 
 ### Call 2 — `applyModelApiCode`
 
+*(Precondition: an edit session opened with `startOmlEditSession`, as in
+[`01-add-entity-via-mcp.md`](01-add-entity-via-mcp.md) Call 1b. Close it with
+`endOmlEditSession` after Call 4's merge succeeds.)*
+
 Submit a **full `eSpace => { ... }` lambda** (ending in `}`, no `eSpace.Save(...)`).
 The System-`User` resolution is the three middle lines; the rest creates the
 throwaway owner entity for this run.

@@ -13,7 +13,7 @@ The Traditional read surface (5 single-object `*Traditional` + 5 `*NamesTraditio
 
 ## Turn
 
-Four MCP calls, plus IDE-side finalisation. (Every call carries the `sessionToken` obtained once from `createSessionToken` — see [`01-add-entity-via-mcp.md`](01-add-entity-via-mcp.md) Call 0.)
+Four MCP calls, plus IDE-side finalisation. (Every call carries the `sessionToken` obtained once from `createSessionToken` — see [`01-add-entity-via-mcp.md`](01-add-entity-via-mcp.md) Call 0. Call 4 runs inside an edit session opened with `startOmlEditSession` beforehand, and the session is closed with `endOmlEditSession` after the merge, as in 01's Calls 1b and 5.)
 
 ### Call 1 — `listApps` (style detection)
 

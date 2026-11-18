@@ -21,6 +21,8 @@ For routine multi-step edits (where you just want each call to read the last goo
 
 ## Turn
 
+The agent already holds a `sessionToken` and opened the module's edit session with `startOmlEditSession` before Step 1 (see [`01-add-entity-via-mcp.md`](01-add-entity-via-mcp.md) Call 1b). **`omlReset` does not end that session** (verified 2026-11-18), so every step below runs inside the same one.
+
 ### Step 1 — first mutation lands
 
 The agent emits the standard `applyModelApiCode` lambda:
@@ -152,6 +154,8 @@ The reset dropped the *pointer*, not the *file* — `<run2>-out.oml` is still on
 
 This works because `omlReset` drops only the tracked pointer, never the file, and `omlMerge` needs nothing more than a real OML on disk. The window is the current Service Studio session: startup wipes the MCP temp folder, so recover before restarting Studio.
 
+**Don't end the edit session before recovering.** `endOmlEditSession` discards unmerged changes and deletes the working copy (per its tool description), which would take the undo handle with it. Close the session only once the user has settled on what to keep.
+
 ---
 
 ## What just happened
@@ -185,4 +189,5 @@ Don't reach for `omlReset` when the user wants to **accept** the chain — that'
 - **First call after reset re-snapshots the live module.** No agent action required — just issue the next MCP call as usual.
 - **`omlRefreshReferences` drops the pointer too** — an unmerged chain vanishes from reads just as after a reset (the `-out.oml` stays on disk, so the same `omlMerge` recovery applies). Refresh references before starting a chain, or merge first.
 - **Pointers are per module.** Resetting one module never touches another's chain, and switching modules in Service Studio does **not** implicitly drop a chain — if you want one gone, reset it explicitly by name.
+- **`omlReset` is not `endOmlEditSession`.** The reset drops the chain but keeps the edit session open, and the discarded copy stays recoverable. Ending the session closes it and deletes the working copy.
 - **`omlMerge` is the "accept" counterpart to `omlReset`** — opposite intent (surface into the IDE rather than discard), and it doubles as the undo for a reset.

@@ -11,6 +11,12 @@ the file to open by hand, or pass to `omlMerge`, if you need to recover a change
 `omlReset` does **not** delete the oml file — a discarded chain stays on disk. A reset with
 nothing in flight does nothing at all.
 
+Writes happen inside an **edit session**. The agent opens it with `startOmlEditSession`
+before its first `applyModelApiCode` on a module, and `applyModelApiCode` refuses to run
+without one. The agent closes it with `endOmlEditSession` when it's done. Ending a session
+discards any unmerged changes and deletes the working copy. `omlReset` and `omlMerge` leave
+the session open.
+
 
 ## 2. Starting Service Studio wipes %TEMP%\ServiceStudio.MCPServer
 

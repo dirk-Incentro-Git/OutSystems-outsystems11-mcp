@@ -34,7 +34,7 @@ graph TB
 
     %% Flows
     Skill -->|Loaded as context / read as reference<br/>Synchronous| Agent
-    Agent -->|MCP tool calls: applyModelApiCode, get*,<br/>omlMerge, omlReset over HTTP<br/>Synchronous| MCP
+    Agent -->|MCP tool calls: start/endOmlEditSession,<br/>applyModelApiCode, get*, omlMerge, omlReset over HTTP<br/>Synchronous| MCP
     MCP -.->|Wraps lambda + spawns per call, stdio JSON-RPC<br/>Synchronous| Sidecar
     Sidecar -->|Snapshot in / save out .oml<br/>Synchronous| OML
     MCP -->|Compare-and-Merge window (omlMerge)<br/>Synchronous| OML
@@ -57,7 +57,7 @@ directs the **agent** to interact with, and the systems the MCP server engages d
 | External Service | Communication Type | Purpose |
 | --- | --- | --- |
 | Coding Agent (Claude Code, GitHub Copilot, Antigravity, Kiro, Codex CLI, Cursor) | Sync (context load) | Consumes SKILL.md + references, plus the harness adapter it recognizes (if any); emits Model API lambdas and MCP tool calls |
-| Service Studio in-process MCP Server (`127.0.0.1:41820/mcp`) | Sync (HTTP, MCP tool calls) | Exposes `applyModelApiCode`, the `get*` reads, `runQuery`, `listApps`, `getValidationMessages`, and host-only `omlReset` / `omlMerge` |
+| Service Studio in-process MCP Server (`127.0.0.1:41820/mcp`) | Sync (HTTP, MCP tool calls) | Exposes `applyModelApiCode`, the `get*` reads, `runQuery`, `listApps`, `getValidationMessages`, the `startOmlEditSession` / `endOmlEditSession` edit-session pair, and host-only `omlReset` / `omlMerge` |
 | Bundled Model API sidecar | Sync (stdio JSON-RPC, out of scope) | Runs the C# `eSpace => {...}` lambda against a snapshot using the OutSystems Model API; implementation not in this repo |
 | Open `.oml` module + `%TEMP%\ServiceStudio.MCPServer\` snapshots | Sync (file I/O, host-managed) | Input snapshot (`<runId>-in.oml`) and mutated output (`<runId>-out.oml`); surfaced to the user via the Compare-and-Merge window |
 
@@ -111,7 +111,9 @@ that does not compile never runs at all and comes back as an MCP tool error, not
 
 ### T4. OML mutation state is host-owned; the agent passes only `code` + `imports` and never threads file paths
 
-The host keeps a per-module **session pointer** at the last successful save and auto-chains
+Writes run inside a per-module **edit session** that the agent opens with `startOmlEditSession`
+and closes with `endOmlEditSession` after the closing merge; `applyModelApiCode` refuses to run
+without one. Within it, the host keeps a per-module **session pointer** at the last successful save and auto-chains
 successive edits through it — the agent never names input or output paths. The pointer advances only
 when the out file was written and `exceptionMessage` is empty; failed calls leave it untouched, so
 retries resume from the last good state (no `omlReset` needed for error recovery). The closing step

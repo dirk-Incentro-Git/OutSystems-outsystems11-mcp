@@ -21,7 +21,9 @@ Do this for the request below:
    `getServerAction`, `getScreen` with `objectName`) with
    `input: { eSpaceName, includeJson: "Never" }` and pattern-match the output
    before writing anything.
-2. **Mutate** with `applyModelApiCode`, `input: { eSpaceName, code, imports }`,
+2. **Mutate.** First call `startOmlEditSession` with `input: { eSpaceName }`;
+   `applyModelApiCode` fails without it. If it says a session is already started
+   and it's yours, carry on. Then call `applyModelApiCode`, `input: { eSpaceName, code, imports }`,
    passing a full `eSpace => { ... }` lambda that ends in `}` and never calls
    `eSpace.Save`. To change an existing element, look it up
    (`eSpace.ServerActions.Named("X")`) and mutate it. Never replay `get*`
@@ -39,7 +41,9 @@ Do this for the request below:
    error is an MCP tool error carrying diagnostics, not silence) — bisect with
    one risky member per call.
 4. **Finalise.** Call `omlMerge` with
-   `input: { eSpaceName, mutatedOmlPath: "<final path>" }`. Don't call
+   `input: { eSpaceName, mutatedOmlPath: "<final path>" }`. After `merged: true`,
+   call `endOmlEditSession` with `input: { eSpaceName }`. Don't end it after a
+   `merged: false`, because ending discards the unmerged work. Don't call
    `omlPublish` unless the user asked to publish.
 
 The change to make:

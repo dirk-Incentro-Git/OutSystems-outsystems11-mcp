@@ -24,6 +24,11 @@ condensed restatement; `SKILL.md` wins if they ever disagree.
   `{ "sessionToken": "<token>" }`. `applyModelApiCode` →
   `input: { eSpaceName, code, imports }` (all required); `omlMerge` →
   `input: { eSpaceName, mutatedOmlPath }`; `omlReset` → `input: { eSpaceName }`.
+- **Open an edit session before `applyModelApiCode`:** call `startOmlEditSession`
+  (`input: { eSpaceName }`) once per module. Without it, every apply fails, probes
+  included. Reads don't need a session, and merge/reset don't end it. Call
+  `endOmlEditSession` after the closing merge, never while unmerged work may still be
+  wanted (ending discards it). A read-only probe is start → probe → end.
 - **Summarise a module with one probe**
   (`servicestudio-mcp-oml/examples/ProbeModuleInventory.cs`), not one getter per element.
   The probe throws before saving, so it's a read: use it even when asked not to change anything.
@@ -70,7 +75,7 @@ condensed restatement; `SKILL.md` wins if they ever disagree.
 - **Finalise with `omlMerge`:** after the final successful mutation, call
   `omlMerge` with `input: { eSpaceName, mutatedOmlPath }` to open Service
   Studio's Compare-and-Merge window. Skip only for read-only tasks or when
-  nothing saved.
+  nothing saved. After `merged: true`, call `endOmlEditSession`.
 - **`merged: false` ("The merge failed. See the log for details.")**: the reason is only in a Service Studio dialog. Ask the user what it says, `omlReset`, re-apply without the cause, and merge the new path. Never set `Theme.IconLibrary`: older Service Studio builds reject the whole merge. Editing the theme stylesheet is fine, and the sidecar's `InvalidIconLibrary` error it causes is expected; merge anyway (SKILL.md § 3.1).
 - **`omlRefreshReferences` drops the session pointer** (unmerged chain vanishes
   from reads) — refresh before a chain or merge first. **`omlPublish` only when

@@ -13,7 +13,7 @@ See [`../reference/mcp-session-pointer.md`](../reference/mcp-session-pointer.md)
 
 ## Default — auto-chain (two calls, no path threading)
 
-Two separate `applyModelApiCode` calls. The host snapshots the open module on Call 1, advances the pointer on success, and Call 2 transparently reads from that pointer. (Every call carries the `sessionToken` obtained once from `createSessionToken` — see [`01-add-entity-via-mcp.md`](01-add-entity-via-mcp.md) Call 0.)
+Two separate `applyModelApiCode` calls. The host snapshots the open module on Call 1, advances the pointer on success, and Call 2 transparently reads from that pointer. (Every call carries the `sessionToken` obtained once from `createSessionToken` — see [`01-add-entity-via-mcp.md`](01-add-entity-via-mcp.md) Call 0. Before Call 1 the agent opened the module's edit session with `startOmlEditSession`, as in 01's Call 1b. **One session covers the whole chain:** don't start a new one per apply, because a second start on the same module fails with "already started".)
 
 ### Call 1 — create the `Customer` entity
 
@@ -108,6 +108,8 @@ After the **last** successful `applyModelApiCode` call (here, Call 2), take its 
 
 Service Studio merges that OML into the open module — through its merge window for the user to review and accept (or reject), or with no dialog, per their setting.
 
+Once `merged` is `true` and the task is done, close the edit session with `endOmlEditSession` (`input: { eSpaceName: "MyModule" }`), as in 01's Call 5.
+
 ---
 
 ## Composition — both mutations in one lambda
@@ -167,6 +169,8 @@ Sometimes you've made one successful change but want to discard it and start ove
 
 If the reset turns out to be a mistake, `omlMerge` with Call 1's `mutatedOmlPath` brings the dropped mutation back — the reset dropped the pointer, not the file.
 
+The reset does **not** end the edit session (verified 2026-11-18), so Call 3 runs without a new `startOmlEditSession`. Don't call `endOmlEditSession` while the reset might still need undoing, because ending the session deletes the working copy.
+
 See [`04-oml-reset.md`](04-oml-reset.md) for a fuller walkthrough of the drop-and-restart scenario.
 
 **`omlRefreshReferences` also drops the pointer.** Refreshing references (`input: { eSpaceName }` plus the token) mid-chain makes the unmerged chain vanish from reads, exactly like a reset (the `-out.oml` stays on disk). Refresh *before* Call 1, or `omlMerge` first.
@@ -184,6 +188,7 @@ The agent passed only `eSpaceName`, a full `code` lambda and `imports` (inside `
 
 ## Things to remember
 
+- **One edit session per module for the whole chain.** `startOmlEditSession` once before the first apply, `endOmlEditSession` once after the closing merge.
 - **Successful mutations chain automatically.** Pass `input: { eSpaceName, code, imports }` (a full `eSpace => { ... }` lambda; `imports` may be `[]`) plus `sessionToken`; you never thread paths between calls.
 - **A failed call doesn't break the chain.** Populated `exceptionMessage` (or an MCP tool error) ⇒ no out file written ⇒ pointer unchanged ⇒ the next call still reads from the last-good state. (Watch out for the silent-no-op trap, where the response is clean and the out file is written but the OML wasn't actually mutated — see [`02-recovery-from-compile-error.md`](02-recovery-from-compile-error.md).)
 - **Composition is for ergonomic locality**, not atomicity — atomicity comes from the pointer.

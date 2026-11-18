@@ -10,14 +10,17 @@ started it fails with `ConnectionRefused`. **Tool names are camelCase, with no
 Tools fall into three buckets:
 
 - **Native host tools** that act on the live Service Studio session directly:
-  `createSessionToken`, `listApps`, and the host-only `omlReset` / `omlMerge` /
-  `omlRefreshReferences` / `omlPublish`.
+  `createSessionToken`, `listApps`, the edit-session pair
+  `startOmlEditSession` / `endOmlEditSession`, and the host-only `omlReset` /
+  `omlMerge` / `omlRefreshReferences` / `omlPublish`.
 - **Sidecar-backed read tools** — `getDataModel`, `getScreen`, `runQuery`,
   `getValidationMessages`, … Each one snapshots the open module to
   `%TEMP%\ServiceStudio.MCPServer\<runId>-in.oml`, runs the bundled sidecar, and returns
   the result. One child process per call.
 - **The write tool** `applyModelApiCode`, which works the same way but also
-  injects the save and advances the session pointer on success.
+  injects the save and advances the session pointer on success. It runs only
+  inside an edit session opened with `startOmlEditSession` (see "Edit session"
+  below).
 
 The sidecar verb name equals the MCP tool name (each tool class sets
 `VerbName = McpToolNames.<X>`). The host injects `omlPath` (the snapshot, or the
@@ -50,6 +53,24 @@ Verified live against Service Studio 11 on 2026-09-30.
 ```
 
 The old flat shape (`{ "eSpaceName": …, … }` at top level) no longer deserializes.
+
+## Edit session
+
+Verified live 2026-11-18. **`applyModelApiCode` requires an open OML edit session on
+its module.** Without one it fails as an MCP tool error before compiling:
+*"No OML edit session is started. Call startOmlEditSession before making edits."*
+That applies to throw-probes too. Read tools don't need a session.
+
+| Tool | Args | Returns / errors |
+|---|---|---|
+| `startOmlEditSession` | `eSpaceName` | `{ started: true }`. Checks out a working copy for that module. Fails if one is already open: *"An OML edit session is already started for this module. Call endOmlEditSession before starting a new one."* |
+| `endOmlEditSession` | `eSpaceName` | `{ ended: true, discardedChanges: bool }`. Ends the session, **discarding unmerged changes and deleting the working copy** (per the tool description). `discardedChanges: true` means unmerged edits were thrown away. Fails if none is open: *"No OML edit session is started. Call startOmlEditSession first."* |
+
+Lifecycle: start once per module, then run any number of `applyModelApiCode` calls,
+`omlMerge` and `omlReset` inside it. Neither of those ends the session (`omlReset`
+verified; `omlMerge` per the tool description). End the session after the closing
+merge. A read-only probe runs as start → probe → end. See
+[`../SKILL.md`](../SKILL.md) § 0.1.
 
 ## `eSpaceName`
 
@@ -102,7 +123,8 @@ The name-list tools (`get…Names`), `listApps`, `runQuery`,
 
 ## Write tool — `applyModelApiCode`
 
-General-purpose mutate-via-C#. Pass a **full `eSpace => { ... }` lambda
+General-purpose mutate-via-C#. **Requires an open edit session on the module**
+(`startOmlEditSession`, above). Pass a **full `eSpace => { ... }` lambda
 without** `eSpace.Save(...)`; the host strips the trailing `}`, appends its own
 save against a host-allocated path, re-closes, and forwards to the sidecar. See
 [`lambda-contract.md`](lambda-contract.md).
@@ -265,6 +287,7 @@ namespaces define an `IExternalSite`).
 | Tool | Args | Returns |
 |---|---|---|
 | `createSessionToken` | `clientName?` (top level, no `input`) | the token string — call once per agent session (see "Session token" above) |
+| `startOmlEditSession` / `endOmlEditSession` | `eSpaceName` | open / close the per-module edit session `applyModelApiCode` requires (see "Edit session" above) |
 | `listApps` | only `sessionToken` | `{ apps: [{ key, name, kind:"eSpace", version, isOpen, isReference, moduleType }] }` — open module + loaded references. `moduleType` (formerly `style`) ∈ `Reactive`, `Mobile`, `Traditional`, `ReactiveLibrary`, `MobileLibrary`, `TraditionalLibrary`, `Service`, `Unknown` (see [`../SKILL.md`](../SKILL.md) § 4.1) |
 
 > **`searchModel` was removed** from the MCP host (no cross-element substring
@@ -302,7 +325,8 @@ When responding to a "modify the OML to do X" request:
    [`../examples/`](../examples/) files are already in exactly this shape —
    full `eSpace => { … }` lambdas with no `eSpace.Save` — so you can use one
    verbatim as `code` and lift its `using` directives into `imports`.
-4. **Call `applyModelApiCode`** with `code` (+ any non-default `imports`). Don't
+4. **Open an edit session** with `startOmlEditSession` (once per module), then
+   **call `applyModelApiCode`** with `code` (+ any non-default `imports`). Don't
    pass `omlPath` — the host injects it.
 5. **Inspect the response:**
    - `exceptionMessage` populated (or an MCP tool error) → runtime issue; fix
@@ -325,6 +349,9 @@ When responding to a "modify the OML to do X" request:
    (`mutatedOmlPath: ""`), the task was read-only, or the user asked you to
    discard the chain (`omlReset`). See
    [`mcp-session-pointer.md`](mcp-session-pointer.md).
+8. **Close the edit session** with `endOmlEditSession` once `merged` is `true` and
+   you're done with the module. Leave it open while unmerged work might still be
+   wanted, because ending it discards that work.
 
 The recovery loop in step 5 is the dominant teaching signal — see
 [`../integration-examples/02-recovery-from-compile-error.md`](../integration-examples/02-recovery-from-compile-error.md).

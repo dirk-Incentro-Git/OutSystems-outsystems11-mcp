@@ -83,7 +83,7 @@ Just describe the change in natural language, e.g.:
 > Add a DueDate Date attribute to the Task entity in the open module.
 ```
 
-The agent should: read the model (`getDataModel`), send an `applyModelApiCode` lambda, verify the response, then call `omlMerge` so the diff opens in Service Studio for review.
+The agent should: read the model (`getDataModel`), open an edit session (`startOmlEditSession`), send an `applyModelApiCode` lambda, verify the response, call `omlMerge` so the diff opens in Service Studio for review, then close the session (`endOmlEditSession`).
 
 To point the agent at deeper reference explicitly:
 

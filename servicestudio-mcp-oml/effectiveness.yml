@@ -48,6 +48,11 @@
 #     MainContent (scenario_22), local insertion that keeps an existing
 #     flow's layout (scenario_23), and a whole-module summary from one
 #     inventory probe (scenario_24).
+#   - the per-module edit session (`startOmlEditSession` /
+#     `endOmlEditSession`) that `applyModelApiCode` requires, verified live
+#     2026-11-18: in the canonical sequence (scenario_3), around a read-only
+#     probe (scenario_24), and recovery from the "No OML edit session is
+#     started" error (scenario_25).
 
 test_type: "effectiveness"
 name: "servicestudio-mcp-oml effectiveness"
@@ -173,8 +178,14 @@ scenario_3:
       - point: "`omlMerge` puts both `eSpaceName` and `mutatedOmlPath` inside `input`"
         description: "The merge call is `{ \"input\": { \"eSpaceName\": \"MyModule\", \"mutatedOmlPath\": \"<path from the apply response>\" }, \"sessionToken\": … }`. Sending `mutatedOmlPath` flat, or omitting `eSpaceName`, is the WRONG answer."
 
+      - point: "Opens an edit session before `applyModelApiCode`"
+        description: "Before the `applyModelApiCode` call, the sequence calls `startOmlEditSession` with `{ \"input\": { \"eSpaceName\": \"MyModule\" }, \"sessionToken\": … }`. Calling `applyModelApiCode` with no edit session is the WRONG answer: it fails with \"No OML edit session is started\". The read calls (`listApps`, `getDataModel`) may come before it, since reads need no session."
+
+      - point: "Closes the edit session after the merge"
+        description: "After `omlMerge` returns `merged: true`, the sequence calls `endOmlEditSession` with `{ \"input\": { \"eSpaceName\": \"MyModule\" }, \"sessionToken\": … }`. Ending the session BEFORE the merge is WRONG, because ending discards unmerged changes."
+
       - point: "Does not call `omlPublish`"
-        description: "The sequence ends at `omlMerge`; it does NOT call `omlPublish`, because the user did not ask to publish."
+        description: "The sequence ends at `omlMerge` (followed by `endOmlEditSession`); it does NOT call `omlPublish`, because the user did not ask to publish."
 
 scenario_4:
   name: "recovery_from_compile_error"
@@ -996,3 +1007,35 @@ scenario_24:
 
       - point: "Avoids getDataModel for orientation on a large module"
         description: "The response notes that `getDataModel` on a large module can be very large (100k+ characters) and reserves it, or the per-element getters, for drilling into the parts that need detail."
+
+      - point: "Wraps the probe in an edit session"
+        description: "The response opens an edit session with `startOmlEditSession` before the throw-probe and closes it with `endOmlEditSession` afterwards, because `applyModelApiCode` (probes included) fails without one. Opening and closing the session changes nothing in the module, so this still respects \"don't change anything\". Skipping `startOmlEditSession` is the WRONG answer. So is refusing to probe because a session is needed."
+
+scenario_25:
+  name: "no_edit_session_error"
+
+  codebase:
+    files: []
+
+  prompt: |
+    I'm driving module `MyModule` through the Service Studio MCP Server and already
+    hold a session token. `getDataModel` works fine, but every `applyModelApiCode`
+    call, even `eSpace => { throw new Exception("PROBE:ok"); }`, fails with:
+    "An error occurred invoking 'applyModelApiCode': No OML edit session is started.
+    Call startOmlEditSession before making edits." What's wrong and what do I do,
+    through to the end of the task?
+
+  validation:
+    prerequisites:
+      - point: "Diagnoses a missing edit session"
+        description: "The response says the module has no open OML edit session. It does NOT blame the lambda, the token or the harness."
+
+    skill_scoring:
+      - point: "Calls `startOmlEditSession` with the input envelope"
+        description: "The fix is `startOmlEditSession` with `{ \"input\": { \"eSpaceName\": \"MyModule\" }, \"sessionToken\": … }`, called once for the module before retrying `applyModelApiCode`. Requesting a new session token or rewriting the lambda is WRONG."
+
+      - point: "Reuses the session for the whole chain"
+        description: "The response keeps the one edit session for every later `applyModelApiCode` call on that module. It does NOT start a new session per call: a second start fails with \"already started\"."
+
+      - point: "Ends the session only after the merge"
+        description: "The response finishes with `omlMerge` and, after `merged: true`, `endOmlEditSession`. It warns that ending the session discards unmerged edits, so it should not be ended while unmerged work may still be wanted."

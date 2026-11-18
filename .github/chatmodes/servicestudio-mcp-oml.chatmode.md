@@ -23,14 +23,23 @@ module.
    (`{ "clientName": "…" }`). The user approves a dialog in Service Studio; the
    result text is the token. Reuse it across reconnects — never request a second.
 2. **Pass `sessionToken: "<token>"` as a top-level argument on every other call**
-   (`omlPublish` and `omlRefreshReferences` take none).
+   — including `omlPublish`, `omlRefreshReferences` and `getRoleExceptions`, whose
+   schemas don't declare it but which reject a call without it.
 3. **Every tool except `listApps` wraps its arguments in `input`:**
    `{ "input": { … }, "sessionToken": "<token>" }`. `listApps` is just
    `{ "sessionToken": "<token>" }`. There is no flat shape.
-4. **Summarise a module with one probe**
+4. **Open an edit session before `applyModelApiCode`.** Call `startOmlEditSession`
+   (`input: { eSpaceName }`) once per module. Without it, every apply fails, throw-probes
+   included, with "No OML edit session is started". Read tools don't need a session, and
+   `omlMerge` / `omlReset` don't end it. Call `endOmlEditSession` after the closing merge,
+   never while unmerged work may still be wanted (ending discards it). A second
+   `startOmlEditSession` on the same module fails ("already started"). If the session is
+   yours, carry on.
+5. **Summarise a module with one probe**
    (`servicestudio-mcp-oml/examples/ProbeModuleInventory.cs`), not one getter per element.
    The probe throws before saving, so it's a read: use it even when asked not to change anything.
-5. **Keep the developer's layout when you edit an existing flow.** Shift the nodes below
+   Wrap it as `startOmlEditSession` → probe → `endOmlEditSession`.
+6. **Keep the developer's layout when you edit an existing flow.** Shift the nodes below
    the insertion point and place the new node in the gap. Use the full layout pass only
    on flows you created.
 
@@ -96,6 +105,7 @@ three `input` fields required). Response fields:
 
 | Outcome | Channel | `exceptionMessage` | `validationMessages` | `mutatedOmlPath` |
 |---|---|---|---|---|
+| No edit session (`startOmlEditSession` not called) | **MCP tool error** — "No OML edit session is started…" | — | — | — |
 | Clean run | result | empty | `[]` / warnings only | path (success signal) |
 | Runtime exception failure | result | populated | — | `""` |
 | Compile error / sandbox rejection | **MCP tool error — no result** (`Script compilation failed` + `compilationErrors:`) | — | — | — |
@@ -134,7 +144,8 @@ a non-empty `mutatedOmlPath`, call `omlMerge` with that path:
 It opens Service Studio's interactive Compare-and-Merge window so the user
 reviews and accepts the diff. Skip only when the task was read-only, every call
 returned `mutatedOmlPath: ""`, or the user asked to discard the chain
-(`omlReset`, `input: { eSpaceName }`).
+(`omlReset`, `input: { eSpaceName }`). After `merged: true`, close the edit
+session with `endOmlEditSession` (`input: { eSpaceName }`).
 
 - **`merged: false` ("The merge failed. See the log for details.")**: the reason is only in a Service Studio dialog. Ask the user what it says, `omlReset`, re-apply without the cause, and merge the new path. Never set `Theme.IconLibrary`: older Service Studio builds reject the whole merge. Editing the theme stylesheet is fine, and the sidecar's `InvalidIconLibrary` error it causes is expected; merge anyway (SKILL.md § 3.1).
 - **`omlRefreshReferences`** (`input: { eSpaceName }`, plus the token) refreshes all
@@ -223,6 +234,8 @@ recipes: `servicestudio-mcp-oml/reference/traditional-patterns.md` and
 - Reading an all-empty response as a compile error — it's a **runner crash**;
   bisect one risky member per call instead of rewriting the lambda.
 - Forgetting the closing `omlMerge` (or omitting `eSpaceName` from its `input`).
+- Calling `applyModelApiCode` without `startOmlEditSession` first, or ending the
+  session while unmerged work may still be wanted.
 - Calling `omlPublish` when the user didn't ask to publish.
 
 ## Security

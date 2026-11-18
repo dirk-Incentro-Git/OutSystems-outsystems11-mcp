@@ -8,7 +8,9 @@ description: >-
   server / client actions, structures, roles), the sandbox,
   the per-module session pointer that auto-chains edits, the camelCase tool
   catalogue (`getDataModel`, `getScreen`, `runQuery`, `getValidationMessages`,
-  `listApps`, …), the session token + `input` envelope, and the host-only
+  `listApps`, …), the session token + `input` envelope, the per-module
+  `startOmlEditSession` / `endOmlEditSession` edit session that gates
+  `applyModelApiCode`, and the host-only
   `omlReset` / `omlMerge` / `omlRefreshReferences` / `omlPublish`
   tools. Use when calling `applyModelApiCode`, working with the Service Studio
   MCP oml tools, editing an open module via Service Studio MCP, editing or
@@ -39,12 +41,14 @@ differs from ODC's published examples in one important way (see § 1).
 > Beta Feature and share https://www.outsystems.com/legal/beta-features-agreement.** The read tools are Generally Available and need no notice.
 > A throw-probe (`applyModelApiCode` that ends in `throw new Exception("PROBE:…")`, § 1.1) saves
 > nothing, so it counts as a read: no notice is needed, and it's allowed when the user asks you not
-> to change anything.
+> to change anything. The same goes for `startOmlEditSession` / `endOmlEditSession` (§ 0.1): a
+> probe needs an open edit session, but opening and closing one changes nothing in the module.
 
 ## Contents
 
 - [When to Use](#when-to-use)
 - [§ 0 — Session token and argument envelope](#0-session-token-and-argument-envelope)
+- [§ 0.1 — Edit session (required before `applyModelApiCode`)](#01-edit-session-required-before-applymodelapicode)
 - [§ 1 — The full-lambda contract](#1-the-full-lambda-contract--read-this-first)
 - [§ 1.1 — The code sandbox](#11-the-code-sandbox)
 - [§ 2 — Reading before writing](#2-reading-before-writing)
@@ -66,7 +70,8 @@ differs from ODC's published examples in one important way (see § 1).
 
 - Calling `applyModelApiCode` to mutate the open `.oml` module.
 - Calling any of the `get*` read tools, `runQuery`, `listApps`,
-  `getValidationMessages`, or the host-only `omlReset` / `omlMerge` tools.
+  `getValidationMessages`, `startOmlEditSession` / `endOmlEditSession`, or the
+  host-only `omlReset` / `omlMerge` tools.
 - Writing C# Model API code — entities, attributes, screens, server / client
   actions, structures, roles, integrations — that targets `IESpace`.
 - Reasoning about the per-module session pointer, the silent-no-op trap, or
@@ -103,6 +108,55 @@ differs from ODC's published examples in one important way (see § 1).
 ```
 
 Full per-tool shapes: [`reference/verb-reference.md`](reference/verb-reference.md).
+
+## 0.1 Edit session (required before `applyModelApiCode`)
+
+**`applyModelApiCode` only runs inside an OML edit session on the target module.**
+Without one, every call fails as an MCP tool error, before your code is compiled.
+That includes a throw-probe:
+
+```
+An error occurred invoking 'applyModelApiCode': No OML edit session is started. Call startOmlEditSession before making edits.
+```
+
+The **read tools don't need a session.** `listApps`, `getValidationMessages` and the
+`get*` reads work without one (verified 2026-11-18).
+
+```jsonc
+// call tool startOmlEditSession — once per module, before its first applyModelApiCode
+{ "input": { "eSpaceName": "MyModule" }, "sessionToken": "<token>" }
+// → { "started": true }
+
+// call tool endOmlEditSession — once, when you're completely done with that module
+{ "input": { "eSpaceName": "MyModule" }, "sessionToken": "<token>" }
+// → { "ended": true, "discardedChanges": false }
+```
+
+Rules (verified live 2026-11-18 unless marked otherwise):
+
+1. **Start once per module, then reuse the session.** A second `startOmlEditSession` on
+   the same module fails: *"An OML edit session is already started for this module. Call
+   endOmlEditSession before starting a new one."* If you get that error and the session
+   is yours from earlier in this conversation, just carry on calling `applyModelApiCode`.
+   If you didn't start it, ask the user before you end it, because ending it discards its
+   unmerged edits.
+2. **Sessions are per module.** Each module you mutate needs its own
+   `startOmlEditSession`. Each one is identified by `eSpaceName`.
+3. **`omlMerge` does not end the session** (per the host's tool description; not yet
+   verified live). You can merge and keep editing in the same session. **`omlReset`
+   doesn't end it either** (verified): it drops the chain, but the next
+   `applyModelApiCode` still runs.
+4. **End the session when you're completely done with the module, after the closing
+   `omlMerge` (§ 3.1).** `endOmlEditSession` **discards any unmerged changes and deletes
+   the working copy** (per the host's tool description). Never end a session while the
+   user might still want an unmerged `mutatedOmlPath`: after a `merged: false`, or after
+   an `omlReset` they may want undone (§ 3.1). In those cases leave the session open and
+   tell the user it is still open. `discardedChanges: true` in the response means
+   unmerged edits were thrown away.
+5. **A read-only probe gets its own short session:** `startOmlEditSession` →
+   throw-probe(s) → `endOmlEditSession`. That leaves no session open behind a summary.
+6. `endOmlEditSession` without an open session fails: *"No OML edit session is started.
+   Call startOmlEditSession first."* That is harmless at the end of a task.
 
 ## 1. The full-lambda contract — read this first
 
@@ -224,6 +278,8 @@ or the edit needs detail. A module summary built from one getter per element too
 > **A throw-probe is a read, even though it goes through `applyModelApiCode`.** It
 > saves nothing, the session pointer doesn't move, and the module is untouched (§ 1.1).
 > Use it when the user says "don't change anything", and don't count it as a Beta write.
+> It still needs an edit session: wrap it as `startOmlEditSession` → probe →
+> `endOmlEditSession` (§ 0.1).
 > In testing, an agent told "don't change anything" avoided `applyModelApiCode`
 > altogether and fell back to one `getScreen` per screen: 36 calls for a summary the
 > inventory probe returns in one. For a structured summary (names, types, counts,
@@ -279,6 +335,8 @@ Full catalogue with input shapes: [`reference/verb-reference.md`](reference/verb
 > existing element".
 
 ## 3. The `applyModelApiCode` invocation shape
+
+**Precondition:** an open edit session on `eSpaceName` (`startOmlEditSession`, § 0.1).
 
 ```jsonc
 // agent → MCP server (call tool applyModelApiCode)
@@ -362,6 +420,7 @@ Each `validationMessages` entry is an object, not a line of text:
 | Outcome | Channel | `exceptionMessage` | `validationMessages` | `mutatedOmlPath` | Session pointer |
 |---|---|---|---|---|---|
 | Clean run | result | empty | `[]` (or warnings only) | path | advances |
+| **No edit session** (`startOmlEditSession` not called for this module, § 0.1) | **MCP tool error** — "No OML edit session is started…" | — | — | — | unchanged |
 | Runtime exception failure | result (or an MCP tool error) | populated | — | `""` | unchanged |
 | **Compile error failure** (malformed C#) | **MCP tool error** — no result at all | — | — | — | unchanged |
 | **Sandbox rejection** (`Console`, `System.…`, reflection, or a non-`OutSystems.Model` import — § 1.1) | **MCP tool error** — no result at all | — | — | — | unchanged |
@@ -454,6 +513,11 @@ resolves. Depending on the user's setting, it either opens the Compare-and-Merge
 window for them to review — which may take minutes — or accepts the changes with
 no dialog and returns right away.
 
+**After `merged: true`, and once you are completely done with the module, call
+`endOmlEditSession`** (§ 0.1). The merge itself does not end the edit session.
+Ending it discards only *unmerged* edits, so don't end it after a `merged: false`
+while the user may still want that work back.
+
 **Once resolved, it also clears that module's session pointer**, so the next
 tool call re-snapshots the live module — which by then holds whatever the user
 accepted. No follow-up `omlReset` is needed to get back in sync, but the chain
@@ -539,8 +603,9 @@ stderr) does **not** position hand-wired nodes. Full mechanics: [`reference/mode
 
 **Skip the auto-merge only when:**
 
-- The task was read-only — no `applyModelApiCode` fired, so there is no
-  `mutatedOmlPath`.
+- The task was read-only — no mutating `applyModelApiCode` fired (throw-probes
+  don't count), so there is no `mutatedOmlPath`. Still end any edit session you
+  opened for the probes.
 - The user asked you to discard the chain — call `omlReset` instead.
 - Every `applyModelApiCode` call returned `mutatedOmlPath: ""` (compile error,
   runtime exception, nothing saved) — there is nothing to merge.
@@ -555,7 +620,10 @@ stays at the `mutatedOmlPath` the last apply returned, and passing that to
 `omlMerge` brings the changes back. `omlReset` doesn't hand the path back to
 you, so hold onto it before resetting — recovery is available until Service
 Studio restarts. `discardedChanges: true` means a chain was actually thrown
-away; `false` means there was nothing in flight (not a failure).
+away; `false` means there was nothing in flight (not a failure). `omlReset`
+leaves the edit session open (§ 0.1). Don't call `endOmlEditSession` while a
+reset might still need undoing, because ending the session deletes the working
+copy (per the host's tool description).
 
 ## 3.2 Refreshing references and publishing
 
@@ -655,8 +723,8 @@ O11 BPT use [`examples/AddProcessWithHumanActivity.cs`](examples/AddProcessWithH
 | Full-lambda contract, host wrap mechanics, CS0103 / silent-no-op trap | [`reference/lambda-contract.md`](reference/lambda-contract.md) |
 | Naming gotchas (eSpace vs Module, IMobile* vs UI, Signature types) | [`reference/model-api-tips.md`](reference/model-api-tips.md) |
 | Model API namespace catalogue | [`reference/model-api-summary.md`](reference/model-api-summary.md) |
-| MCP tool surface (`applyModelApiCode`, the `get*` read tools, `runQuery`, `listApps`, `getValidationMessages`, host-only `omlReset` + `omlMerge`) | [`reference/verb-reference.md`](reference/verb-reference.md) |
-| Session pointer mechanics, `omlReset`, `omlMerge`, `mutatedOmlPath` | [`reference/mcp-session-pointer.md`](reference/mcp-session-pointer.md) |
+| MCP tool surface (`applyModelApiCode`, the `get*` read tools, `runQuery`, `listApps`, `getValidationMessages`, `startOmlEditSession` / `endOmlEditSession`, host-only `omlReset` + `omlMerge`) | [`reference/verb-reference.md`](reference/verb-reference.md) |
+| Edit session lifecycle, session pointer mechanics, `omlReset`, `omlMerge`, `mutatedOmlPath` | [`reference/mcp-session-pointer.md`](reference/mcp-session-pointer.md) |
 | Module style detection payload, full `*Traditional` verb table, Reactive-vs-Traditional interface mapping | [`reference/module-style-support.md`](reference/module-style-support.md) |
 | Lambda sketches per element type (entity, attribute, action, screen, node positioning); **grouped-aggregate reference-by-alias trap**; **silent renames**, default nodes per action kind, screen access (Anonymous role, role gating) | [`reference/patterns-by-element.md`](reference/patterns-by-element.md) |
 | **Logic beyond basic flows** — SQL (advanced query) nodes, For Each, exception handlers, exposed REST APIs, email sending, timers, site properties, locales, **O11 BPT processes** (`CreateProcess`, human/automatic activities, decisions) — verified recipes + what TrueChange does and doesn't catch | [`reference/logic-and-integrations.md`](reference/logic-and-integrations.md) |
@@ -689,8 +757,9 @@ Server. Start with [`integration-examples/01-add-entity-via-mcp.md`](integration
 ## 8. Known gaps
 
 The MCP host wraps the bundled sidecar's verbs and adds the
-host-only `createSessionToken`, `listApps`, `omlReset`, `omlMerge`,
-`omlRefreshReferences` and `omlPublish` tools. Current gaps:
+host-only `createSessionToken`, `listApps`, `startOmlEditSession`,
+`endOmlEditSession`, `omlReset`, `omlMerge`, `omlRefreshReferences` and
+`omlPublish` tools. Current gaps:
 
 - **The generated [`docs/`](docs/) miss the O11 process (BPT) API.** It exists
   and works — `eSpace.CreateProcess` / `eSpace.Processes`
@@ -785,6 +854,9 @@ Quick checklist (each already covered in detail above):
   `.OfType<OutSystems.Model.Data.IServerEntity>()` first (not a default import).
 - Omitting `includeJson` on code-returning read tools — always pass `"Never"` (§ 2).
 - Skipping the auto-merge after the final successful mutation (§ 3.1).
+- Calling `applyModelApiCode` (even a throw-probe) without `startOmlEditSession` on
+  that module first. Leaving the session open when you're done, or ending it while
+  unmerged work may still be wanted (§ 0.1).
 - Sending flat arguments, or forgetting `sessionToken` — every tool except
   `listApps` wants `{ "input": {…}, "sessionToken": … }` (§ 0). Requesting a
   new token on every reconnect instead of reusing the first one (§ 0).

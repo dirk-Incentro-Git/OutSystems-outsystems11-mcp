@@ -8,6 +8,15 @@ call after the host has no pointer (fresh boot, open module just changed, or
 right after `omlReset` or `omlMerge`) snapshots the live module from Service
 Studio onto disk and uses that snapshot as the starting input.
 
+> **Edit session vs. pointer.** These are two separate layers. The **edit session**
+> (`startOmlEditSession` / `endOmlEditSession`, [`../SKILL.md`](../SKILL.md) § 0.1) is
+> the gate: `applyModelApiCode` refuses to run without one. The **pointer** is the
+> chain of saves *inside* that session. `omlReset` and `omlMerge` drop the pointer
+> but leave the session open (`omlReset` verified 2026-11-18; `omlMerge` per the
+> host's tool description). `endOmlEditSession` closes the session and, per its tool
+> description, discards unmerged changes and deletes the working copy. Don't count on
+> the "discarded copy stays on disk" recovery below surviving an `endOmlEditSession`.
+
 The pointer is host-only state, kept per open module. The agent neither reads nor sets it explicitly —
 but on a clean save `applyModelApiCode` returns the pointer's new path as
 `mutatedOmlPath`, which is what you hand to `omlMerge`.
@@ -221,6 +230,7 @@ work is surfaced to the user on the way out.
 | "That reset was a mistake — put it back" | `omlMerge eSpaceName=<module> mutatedOmlPath=<path from the last apply before the reset>` |
 | "I've merged, now keep going on the same module" | nothing — the next call already re-snapshots the live module |
 | Failed `applyModelApiCode` you want to retry | neither — the pointer is already unchanged |
+| "I'm done with this module" (after `merged: true`) | `endOmlEditSession eSpaceName=<module>` — closes the edit session; never before unmerged work is merged or given up |
 
 ## What happens on the first call after reset or merge
 
@@ -251,6 +261,9 @@ another.
 
 ## Summary
 
+- `applyModelApiCode` runs only inside an edit session: `startOmlEditSession`
+  once per module first, `endOmlEditSession` once you're completely done (after
+  the closing merge). Reset and merge don't end the session.
 - The pointer is invisible to the agent — pass `code` (+ optional `imports`) to
   `applyModelApiCode`, nothing more. Read tools take only their documented args
   (`objectName` for the by-name `get<Element>` family, `includeJson` for
